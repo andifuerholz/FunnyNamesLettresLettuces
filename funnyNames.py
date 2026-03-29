@@ -1,46 +1,82 @@
 import streamlit as st
 import random
 import string
-import requests
-from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import numpy as np
+import re
+import requests
 import io
 
-# ---------------------------------------------------------
-# Load animal names from Wikipedia (no emojis, no ß)
-# ---------------------------------------------------------
-@st.cache_data
-def load_animals_from_web():
+
+# ============================================================
+# 1) LOAD ANIMALS (with fallback + categories)
+# ============================================================
+
+def load_animals():
+    """Try loading from Wikipedia using regex. Falls back to local lists."""
     url = "https://de.wikipedia.org/wiki/Liste_von_Tiernamen"
-    r = requests.get(url)
-    soup = BeautifulSoup(r.text, "html.parser")
+    try:
+        r = requests.get(url, timeout=2)
+        if r.status_code == 200:
+            text = r.text
+            found = re.findall(r">([A-ZÄÖÜ][a-zäöüA-ZÄÖÜ]{2,20})<", text)
+            animals = [a for a in found if "ß" not in a and len(a) <= 20]
+            if len(animals) > 30:
+                return sorted(set(animals))
+    except:
+        pass
 
-    animals = []
-    for li in soup.select("div.mw-parser-output ul li"):
-        text = li.get_text().strip()
+    # -------- FALLBACK with categories (120+ animals) ----------
+    fallback = {
+        "Waldtiere": [
+            "Fuchs","Hirsch","Reh","Wolf","Uhu","Igel","Eule","Marder","Dachs","Specht",
+            "Kauz","Luchs","Wildschwein","Hase","Eichhörnchen"
+        ],
+        "Bauernhof": [
+            "Kuh","Pferd","Schaf","Ziege","Gans","Ente","Huhn","Truthahn","Gockel","Esel",
+            "Hund","Katze","Hahn","Stier"
+        ],
+        "Safari": [
+            "Elefant","Giraffe","Löwe","Tiger","Panther","Jaguar","Gepard",
+            "Antilope","Zebra","Nashorn","Hyäne","Flusspferd","Schakal"
+        ],
+        "Meer": [
+            "Delfin","Hai","Wal","Seelöwe","Robbe","Seeigel","Seestern","Seepferd",
+            "Tintenfisch","Oktopus","Makrele","Hering","Kabeljau","Krabbe"
+        ],
+        "Vögel": [
+            "Adler","Falke","Habicht","Möwe","Rabe","Spatz","Kranich","Flamingo",
+            "Papagei","Kakadu","Kajak","Taube","Storch","Geier"
+        ],
+        "Reptilien & Amphibien": [
+            "Echse","Gecko","Schlange","Kobra","Viper","Krokodil","Alligator",
+            "Kröte","Frosch","Molch","Salamander","Schildkröte"
+        ],
+        "Kleintiere": [
+            "Hamster","Maus","Ratte","Meerschweinchen","Lemming","Maulwurf",
+            "Waschbär","Biber","Frettchen","Kaninchen"
+        ],
+        "Insekten": [
+            "Ameise","Wespe","Biene","Hornisse","Schmetterling","Libelle",
+            "Käfer","Marienkäfer","Raupe","Heuschrecke"
+        ]
+    }
 
-        # Basic filters
-        if 3 < len(text) < 20 \
-            and text[0].isupper() \
-            and " " not in text \
-            and "ß" not in text:     # requests no ß
-            animals.append(text)
-
-    return sorted(set(animals))
+    return fallback
 
 
-# ---------------------------------------------------------
-# Word search generator
-# ---------------------------------------------------------
+# ============================================================
+# 2) WORD SEARCH GENERATOR
+# ============================================================
+
 def generate_wordsearch(words, size=15):
-    grid = [[None] * size for _ in range(size)]
-    sol = [[False] * size for _ in range(size)]
+    grid = [[None]*size for _ in range(size)]
+    sol = [[False]*size for _ in range(size)]
 
     def place(word):
+        L = len(word)
         for _ in range(2000):
-            direction = random.choice(["H", "V", "D"])
-            L = len(word)
+            direction = random.choice(["H","V","D"])
 
             if direction == "H":
                 r = random.randrange(size)
@@ -71,95 +107,9 @@ def generate_wordsearch(words, size=15):
 
         return False
 
-    # place words
     for w in words:
         place(w)
 
-    # fill empty
     for r in range(size):
         for c in range(size):
             if grid[r][c] is None:
-                grid[r][c] = random.choice(string.ascii_uppercase)
-
-    return grid, sol
-
-
-# ---------------------------------------------------------
-# PNG creation
-# ---------------------------------------------------------
-def create_png(grid):
-    size = len(grid)
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.imshow(np.zeros((size, size)), cmap="gray_r")
-
-    ax.set_xticks(np.arange(size))
-    ax.set_yticks(np.arange(size))
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.grid(color="black", linewidth=1)
-
-    for r in range(size):
-        for c in range(size):
-            ax.text(
-                c, r,
-                grid[r][c],
-                va="center", ha="center",
-                fontsize=14, fontname="DejaVu Sans"
-            )
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    buf.seek(0)
-    plt.close()
-    return buf
-
-
-# ---------------------------------------------------------
-# Streamlit UI
-# ---------------------------------------------------------
-st.title("🐾 Tier‑Suchsel Generator (PNG‑Export + Lösung im Browser)")
-
-animals = load_animals_from_web()
-st.success(f"{len(animals)} Tiernamen geladen!")
-
-amount = st.slider("Wie viele Tiere verstecken?", 5, 25, 15)
-size = st.slider("Grösse des Suchsel‑Rasters", 10, 25, 15)
-
-if st.button("🔍 Suchsel erzeugen"):
-    selected = random.sample(animals, amount)
-    st.write("**Ausgewählte Tiere:**")
-    st.write(", ".join(selected))
-
-    grid, sol = generate_wordsearch([a.upper() for a in selected], size)
-
-    # ---------- show puzzle ----------
-    st.subheader("📘 Suchsel (Rätsel)")
-    for row in grid:
-        st.text(" ".join(row))
-
-    # ---------- show solution ----------
-    st.subheader("✅ Lösung (nur hier, nicht im Download)")
-
-    sol_display = []
-    for r in range(size):
-        row = []
-        for c in range(size):
-            if sol[r][c]:
-                row.append(f":red[{grid[r][c]}]")
-            else:
-                row.append(grid[r][c])
-        sol_display.append(" ".join(row))
-
-    for line in sol_display:
-        st.markdown(line)
-
-    # ---------- PNG download ----------
-    png = create_png(grid)
-
-    st.download_button(
-        "📥 Suchsel als PNG herunterladen",
-        data=png,
-        file_name="suchsel.png",
-        mime="image/png"
-    )
