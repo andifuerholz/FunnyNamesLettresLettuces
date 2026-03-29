@@ -1,152 +1,165 @@
 import streamlit as st
 import random
 import string
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-import tempfile
-import os
+import requests
+from bs4 import BeautifulSoup
+import matplotlib.pyplot as plt
+import numpy as np
+import io
 
-# -------------------------------------------------------------
-# Random name generator
-# -------------------------------------------------------------
-def generate_random_name():
-    start = ["Mi", "Mu", "La", "Lu", "Ki", "Ka", "Ko", "Fi", "Fo", "Bu", "Be", "Bo", "Tu", "Ti", "Te", "Ni", "No", "Nu"]
-    middle = ["mi", "mu", "li", "la", "ra", "ri", "ro", "ru", "fi", "fo", "fa", "fe"]
-    end = ["na", "ra", "lo", "la", "ta", "to", "ti", "po", "pe", "ni", "nu", "mi", "ku", "ko"]
+# ---------------------------------------------------------
+# Load animal names from Wikipedia (no emojis, no ß)
+# ---------------------------------------------------------
+@st.cache_data
+def load_animals_from_web():
+    url = "https://de.wikipedia.org/wiki/Liste_von_Tiernamen"
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    # structure: Start + Middle + End (2–3 Silben)
-    syllables = random.randint(2, 3)
-    if syllables == 2:
-        name = random.choice(start) + random.choice(end)
-    else:
-        name = random.choice(start) + random.choice(middle) + random.choice(end)
+    animals = []
+    for li in soup.select("div.mw-parser-output ul li"):
+        text = li.get_text().strip()
 
-    # Funny addon
-    addon = [" Flitz", " Wusel", " Purzel", " Krawall", " Tröti", " Mumpel", " Schnurps", " Kuller", " Muggel", ""]
-    name += random.choice(addon)
+        # Basic filters
+        if 3 < len(text) < 20 \
+            and text[0].isupper() \
+            and " " not in text \
+            and "ß" not in text:     # requests no ß
+            animals.append(text)
 
-    return name.replace(" ", "").upper()
+    return sorted(set(animals))
 
 
-# -------------------------------------------------------------
+# ---------------------------------------------------------
 # Word search generator
-# -------------------------------------------------------------
+# ---------------------------------------------------------
 def generate_wordsearch(words, size=15):
-    grid = [[None for _ in range(size)] for _ in range(size)]
-    solution_mask = [[False]*size for _ in range(size)]
+    grid = [[None] * size for _ in range(size)]
+    sol = [[False] * size for _ in range(size)]
 
-    def place(name):
+    def place(word):
         for _ in range(2000):
             direction = random.choice(["H", "V", "D"])
+            L = len(word)
+
             if direction == "H":
                 r = random.randrange(size)
-                c = random.randrange(size - len(name))
-                if all(grid[r][c+i] in (None, name[i]) for i in range(len(name))):
-                    for i in range(len(name)):
-                        grid[r][c+i] = name[i]
-                        solution_mask[r][c+i] = True
+                c = random.randrange(size - L)
+                if all(grid[r][c+i] in (None, word[i]) for i in range(L)):
+                    for i in range(L):
+                        grid[r][c+i] = word[i]
+                        sol[r][c+i] = True
                     return True
 
             if direction == "V":
-                r = random.randrange(size - len(name))
+                r = random.randrange(size - L)
                 c = random.randrange(size)
-                if all(grid[r+i][c] in (None, name[i]) for i in range(len(name))):
-                    for i in range(len(name)):
-                        grid[r+i][c] = name[i]
-                        solution_mask[r+i][c] = True
+                if all(grid[r+i][c] in (None, word[i]) for i in range(L)):
+                    for i in range(L):
+                        grid[r+i][c] = word[i]
+                        sol[r+i][c] = True
                     return True
 
             if direction == "D":
-                r = random.randrange(size - len(name))
-                c = random.randrange(size - len(name))
-                if all(grid[r+i][c+i] in (None, name[i]) for i in range(len(name))):
-                    for i in range(len(name)):
-                        grid[r+i][c+i] = name[i]
-                        solution_mask[r+i][c+i] = True
+                r = random.randrange(size - L)
+                c = random.randrange(size - L)
+                if all(grid[r+i][c+i] in (None, word[i]) for i in range(L)):
+                    for i in range(L):
+                        grid[r+i][c+i] = word[i]
+                        sol[r+i][c+i] = True
                     return True
+
         return False
 
     # place words
     for w in words:
         place(w)
 
-    # fill empty cells
+    # fill empty
     for r in range(size):
         for c in range(size):
             if grid[r][c] is None:
                 grid[r][c] = random.choice(string.ascii_uppercase)
 
-    return grid, solution_mask
+    return grid, sol
 
 
-# -------------------------------------------------------------
-# PDF export
-# -------------------------------------------------------------
-def create_pdf(grid, solution_mask, cell=30):
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    filename = tmp.name
-
-    c = canvas.Canvas(filename, pagesize=letter)
-    margin = 40
+# ---------------------------------------------------------
+# PNG creation
+# ---------------------------------------------------------
+def create_png(grid):
     size = len(grid)
 
-    # Page 1
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(np.zeros((size, size)), cmap="gray_r")
+
+    ax.set_xticks(np.arange(size))
+    ax.set_yticks(np.arange(size))
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.grid(color="black", linewidth=1)
+
     for r in range(size):
-        for col in range(size):
-            x = margin + col * cell
-            y = 700 - r * cell
-            c.rect(x, y, cell, cell)
-            c.drawCentredString(x + cell/2, y + cell/2 - 5, grid[r][col])
-    c.showPage()
+        for c in range(size):
+            ax.text(
+                c, r,
+                grid[r][c],
+                va="center", ha="center",
+                fontsize=14, fontname="DejaVu Sans"
+            )
 
-    # Page 2 (solution)
-    for r in range(size):
-        for col in range(size):
-            x = margin + col * cell
-            y = 700 - r * cell
-            c.rect(x, y, cell, cell)
-            if solution_mask[r][col]:
-                c.setFillColor(colors.red)
-            else:
-                c.setFillColor(colors.black)
-            c.drawCentredString(x + cell/2, y + cell/2 - 5, grid[r][col])
-            c.setFillColor(colors.black)
-
-    c.save()
-    return filename
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    plt.close()
+    return buf
 
 
-# -------------------------------------------------------------
-# STREAMLIT UI
-# -------------------------------------------------------------
-st.title("🎲 Zufälliger Suchsel-Generator mit Fantasienamen")
+# ---------------------------------------------------------
+# Streamlit UI
+# ---------------------------------------------------------
+st.title("🐾 Tier‑Suchsel Generator (PNG‑Export + Lösung im Browser)")
 
-amount = st.slider("Wieviele zufällige Namen?", 5, 20, 10)
-size = st.slider("Grid-Grösse", 10, 25, 15)
+animals = load_animals_from_web()
+st.success(f"{len(animals)} Tiernamen geladen!")
 
-if st.button("🎉 Neues Suchsel erzeugen"):
-    # generate random names
-    words = [generate_random_name() for _ in range(amount)]
-    st.write("**Zufällige Namen:**")
-    st.write(words)
+amount = st.slider("Wie viele Tiere verstecken?", 5, 25, 15)
+size = st.slider("Grösse des Suchsel‑Rasters", 10, 25, 15)
 
-    # create puzzle
-    grid, solution_mask = generate_wordsearch(words, size)
+if st.button("🔍 Suchsel erzeugen"):
+    selected = random.sample(animals, amount)
+    st.write("**Ausgewählte Tiere:**")
+    st.write(", ".join(selected))
 
-    st.subheader("🔍 Suchsel")
+    grid, sol = generate_wordsearch([a.upper() for a in selected], size)
+
+    # ---------- show puzzle ----------
+    st.subheader("📘 Suchsel (Rätsel)")
     for row in grid:
         st.text(" ".join(row))
 
-    # PDF generation
-    pdf_file = create_pdf(grid, solution_mask)
+    # ---------- show solution ----------
+    st.subheader("✅ Lösung (nur hier, nicht im Download)")
 
-    with open(pdf_file, "rb") as f:
-        st.download_button(
-            "📄 PDF herunterladen",
-            f,
-            file_name="suchsel.pdf",
-            mime="application/pdf"
-        )
+    sol_display = []
+    for r in range(size):
+        row = []
+        for c in range(size):
+            if sol[r][c]:
+                row.append(f":red[{grid[r][c]}]")
+            else:
+                row.append(grid[r][c])
+        sol_display.append(" ".join(row))
 
-    os.remove(pdf_file)
+    for line in sol_display:
+        st.markdown(line)
+
+    # ---------- PNG download ----------
+    png = create_png(grid)
+
+    st.download_button(
+        "📥 Suchsel als PNG herunterladen",
+        data=png,
+        file_name="suchsel.png",
+        mime="image/png"
+    )
